@@ -7,6 +7,8 @@
 #
 # License: CC0 1.0 Universal
 
+import cPickle
+import resource
 import time
 import warnings
 import sys
@@ -14,6 +16,7 @@ from os.path import join, dirname
 import tarfile
 import numpy
 import rasterio
+import shutil
 from rasterio.warp import reproject, RESAMPLING, transform
 
 from skimage import img_as_ubyte, exposure
@@ -105,6 +108,11 @@ class Process(Verbosity):
                     reproject(band, new_bands[i], src_transform=src.transform, src_crs=src.crs,
                               dst_transform=dst_transform, dst_crs=self.dst_crs, resampling=RESAMPLING.nearest)
 
+                    f = open('band_%s' % i, 'w')
+                    cPickle.dump(new_bands[i], f)
+                    f.close()
+                    new_bands[i] = None
+
                 if pansharpen:
                     self.output("Pansharpening", normal=True, arrow=True)
                     # Pan sharpening
@@ -119,33 +127,34 @@ class Process(Verbosity):
                     b = b * pan
                     g = g * pan
 
-                r = r.astype(numpy.uint16)
-                g = g.astype(numpy.uint16)
-                b = b.astype(numpy.uint16)
-
-                self.output("Color correcting", normal=True, arrow=True)
-                p2r, p98r = self._percent_cut(r)
-                p2g, p98g = self._percent_cut(g)
-                p2b, p98b = self._percent_cut(b)
-                r = exposure.rescale_intensity(r, in_range=(p2r, p98r))
-                g = exposure.rescale_intensity(g, in_range=(p2g, p98g))
-                b = exposure.rescale_intensity(b, in_range=(p2b, p98b))
-
-                # Gamma correction
-                r = exposure.adjust_gamma(r, 1.1)
-                b = exposure.adjust_gamma(b, 0.9)
-
-                self.output("Writing output", normal=True, arrow=True)
                 output = rasterio.open(self.output_file, 'w', driver='GTiff',
                                        width=dst_shape[1], height=dst_shape[0],
                                        count=3, dtype=numpy.uint8,
                                        nodata=0, transform=dst_transform, photometric='RGB',
                                        crs=self.dst_crs)
 
-                new_bands = [r, g, b]
+                for i in range(0, 3):
+                    self.output("Color correcting band %s" % (i + 1), normal=True, arrow=True)
 
-                for i, band in enumerate(new_bands):
-                    output.write_band(i+1, img_as_ubyte(band))
+                    f = open('band_%s' % i, 'r')
+                    obj = cPickle.load(f)
+                    obj = obj.astype(numpy.uint16)
+
+                    p2, p98 = self._percent_cut(obj)
+
+                    obj = exposure.rescale_intensity(obj, in_range=(p2, p98))
+
+                    if i == 0:
+                        obj = exposure.adjust_gamma(obj, 1.1)
+
+                    if i == 1:
+                        obj = exposure.adjust_gamma(obj, 0.9)
+
+                    self.output("Writing output band %s" % (i + 1), normal=True, arrow=True)
+                    output.write_band(i+1, img_as_ubyte(obj))
+
+                    obj = None
+                    shutil.rmtree('band_%s' % i)
 
                 return self.output_file
 
@@ -208,6 +217,11 @@ class timer(object):
 
 
 if __name__ == '__main__':
+
+    rsrc = resource.RLIMIT_DATA
+    resource.setrlimit(rsrc, (268435456, 268435456))
+    soft, hard = resource.getrlimit(rsrc)
+    print 'Soft limit starts as  :%s , hard: %s' % (soft, hard)
 
     with timer():
         p = Process(sys.argv[1],
