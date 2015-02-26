@@ -84,13 +84,20 @@ class Process(Verbosity):
                     bands.append(self._read_band(bands_path[i]))
 
                 src = rasterio.open(bands_path[-1])
+                src_transform = src.transform
+                src_shape = src.shape
+                src_affine = src.affine
+                src_crs = src.crs
+                del src
 
-                crn = self._get_bounderies(src)
+                crn = self._get_bounderies(src_affine, src_shape, src_crs)
 
                 dst_shape = (int((crn['lr']['x'][1][0] - crn['ul']['x'][1][0])/self.pixel),
                              int((crn['lr']['y'][1][0] - crn['ul']['y'][1][0])/self.pixel))
 
                 dst_transform = (crn['ul']['x'][1][0], self.pixel, 0.0, crn['ul']['y'][1][0], 0.0, -self.pixel)
+
+                del crn
 
                 r = numpy.empty(dst_shape, dtype=numpy.uint16)
                 g = numpy.empty(dst_shape, dtype=numpy.uint16)
@@ -105,13 +112,16 @@ class Process(Verbosity):
                 self.output("Projecting", normal=True, arrow=True)
                 for i, band in enumerate(bands):
                     self.output("Projecting band %s" % (i + 1), normal=True, color='green', indent=1)
-                    reproject(band, new_bands[i], src_transform=src.transform, src_crs=src.crs,
+                    reproject(band, new_bands[i], src_transform=src_transform, src_crs=src_crs,
                               dst_transform=dst_transform, dst_crs=self.dst_crs, resampling=RESAMPLING.nearest)
 
                     f = open('band_%s' % i, 'w')
                     cPickle.dump(new_bands[i], f)
                     f.close()
                     new_bands[i] = None
+
+                del new_bands
+                del bands
 
                 if pansharpen:
                     self.output("Pansharpening", normal=True, arrow=True)
@@ -153,7 +163,7 @@ class Process(Verbosity):
                     self.output("Writing output band %s" % (i + 1), normal=True, arrow=True)
                     output.write_band(i+1, img_as_ubyte(obj))
 
-                    obj = None
+                    del obj
                     shutil.rmtree('band_%s' % i)
 
                 return self.output_file
@@ -183,23 +193,20 @@ class Process(Verbosity):
 
         return bands
 
-    def _get_projection(self, src):
-        return {'init': unicode.encode(src.crs['init'])}
-
-    def _get_bounderies(self, src):
+    def _get_bounderies(self, src_affine, src_shape, src_crs):
 
         self.output("Getting bounderies", normal=True, arrow=True)
         output = {'ul': {'x': [0, 0], 'y': [0, 0]},  # ul: upper left
                   'lr': {'x': [0, 0], 'y': [0, 0]}}  # lr: lower right
 
-        output['ul']['x'][0] = src.affine[2]
-        output['ul']['y'][0] = src.affine[5]
-        output['ul']['x'][1], output['ul']['y'][1] = transform(src.crs, self.projection,
+        output['ul']['x'][0] = src_affine[2]
+        output['ul']['y'][0] = src_affine[5]
+        output['ul']['x'][1], output['ul']['y'][1] = transform(src_crs, self.projection,
                                                                [output['ul']['x'][0]],
                                                                [output['ul']['y'][0]])
-        output['lr']['x'][0] = output['ul']['x'][0] + self.pixel * src.shape[0]
-        output['lr']['y'][0] = output['ul']['y'][0] + self.pixel * src.shape[1]
-        output['lr']['x'][1], output['lr']['y'][1] = transform(src.crs, self.projection,
+        output['lr']['x'][0] = output['ul']['x'][0] + self.pixel * src_shape[0]
+        output['lr']['y'][0] = output['ul']['y'][0] + self.pixel * src_shape[1]
+        output['lr']['x'][1], output['lr']['y'][1] = transform(src_crs, self.projection,
                                                                [output['lr']['x'][0]],
                                                                [output['lr']['y'][0]])
 
